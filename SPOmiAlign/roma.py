@@ -235,7 +235,7 @@ def draw_matches_visualization(im1, im2, kpts1, kpts2, radius=6):
         cv2.circle(vis, pt2, radius, color_bgr, -1, cv2.LINE_AA)
     return vis
 
-def show_image_in_jupyter(img, title="Image", figsize=(20, 10), dpi=100):
+def show_image_in_jupyter(img, title="Image", figsize=(20, 10), dpi=70):
     if img is None: return
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if len(img.shape) == 3 else img
     plt.figure(figsize=figsize, dpi=dpi)
@@ -251,7 +251,7 @@ def show_image_in_jupyter(img, title="Image", figsize=(20, 10), dpi=100):
 def align_and_process_images(
     img1_path, 
     img2_path, 
-    h5ad_path, 
+    h5ad_path=None, 
     h5ad_path_img1=None, 
     method='Affine', 
     output_dir='output',
@@ -292,7 +292,7 @@ def align_and_process_images(
 
         # 1. 预处理数据
         # 保持原函数逻辑：先基于 (0,0) 进行全局缩放
-        pts_f64 = pts.astype(np.float64) * float(s)
+        pts_f64 = pts.astype(np.float64)
         
         # 2. 确定旋转中心 (Origin)
         # 原函数基于 target_size 的翻转本质上是围绕图像中心旋转
@@ -304,7 +304,7 @@ def align_and_process_images(
         
         # 旋转矩阵 R
         R_cw = np.array([[c,  sin_t],
-                        [-sin_t, c]], dtype=np.float64)
+                        [-sin_t, c]], dtype=np.float64) * float(s)
 
         # 4. 应用仿射变换
         # 公式: out = (pts - origin) @ R.T + origin
@@ -371,118 +371,144 @@ def align_and_process_images(
 
     # 4. Image Warping
     print("Warping images...")
-    fill_color = im2_bgr_orig[0, 0].tolist()
+
+    
+    fill_color = im2_bgr_orig[10, 10].tolist()
+    
+    
+    print(f"Padding fill color (from 10,10): {fill_color}")
+    # ================= 修改结束 =================
+
     im2_resized = cv2.cvtColor(np.array(im2_pil_raw.resize((W, H))), cv2.COLOR_RGB2BGR)
     im1_resized = cv2.cvtColor(np.array(im1_pil_raw.resize((W, H))), cv2.COLOR_RGB2BGR)
 
     if method.lower() == 'homography':
+        
         warped_small = cv2.warpPerspective(im2_resized, M, (W, H), borderValue=fill_color)
+    
     elif method.lower() == 'bspline':
+        
         warped_small = warp_image_bspline(im2_resized, M, (W, H)).astype(np.uint8)
+    
     elif method.lower() == 'affine+bspline':
+        
         im2_aff = cv2.warpAffine(im2_resized, M, (W, H), borderValue=fill_color)
+        
+        
         warped_small = warp_image_bspline(im2_aff, tx_bspline, (W, H)).astype(np.uint8)
+    
     else:
+        # 默认 Affine
         warped_small = cv2.warpAffine(im2_resized, M, (W, H), borderValue=fill_color)
         
     warped_im2_orig = cv2.resize(warped_small, (orig_W, orig_H), interpolation=cv2.INTER_LINEAR)
+    if h5ad_path is not None:
+        # 5. H5AD Processing
+        print("Processing H5AD coordinates...")
+        h5ad_save_path = os.path.join(output_dir, "transformed.h5ad")
+        
+        # 1. 定义获取坐标的函数 (保持不变，读取逻辑需与写入逻辑对应)
+        def get_coords(adata_obj):
+            # 如果列名存在且在 obs 中，优先从 obs 读取
+            if x_obs_col and y_obs_col and x_obs_col in adata_obj.obs:
+                print(x_obs_col, y_obs_col)
+                return np.column_stack((adata_obj.obs[x_obs_col], adata_obj.obs[y_obs_col])).astype(np.float32)
+            # 否则从 obsm 读取
+            return adata_obj.obsm[spatial_key].copy().astype(np.float32)
 
-    # 5. H5AD Processing
-    print("Processing H5AD coordinates...")
-    h5ad_save_path = os.path.join(output_dir, "transformed.h5ad")
-    
-    def get_coords(adata_obj):
-        if x_obs_col and y_obs_col and x_obs_col in adata_obj.obs:
-            return np.column_stack((adata_obj.obs[x_obs_col], adata_obj.obs[y_obs_col])).astype(np.float32)
-        return adata_obj.obsm[spatial_key].copy().astype(np.float32)
+        # 2. 【核心修改】：根据存在性判断写入位置
+        def update_coords_in_adata(adata_obj, points, x_col, y_col, sp_key):
+            """
+            逻辑：
+            1. 判断 x_col 和 y_col 是否非空，且确实是 adata.obs 中的列。
+            2. 如果是 -> 更新 adata.obs。
+            3. 如果否 (参数为空 或 列不存在) -> 更新 adata.obsm[sp_key]。
+            """
+            # 检查是否为有效的 obs 列名
+            if x_col and y_col and (x_col in adata_obj.obs) and (y_col in adata_obj.obs):
+                # print(f"📝 Updating coordinates in adata.obs columns: {x_col}, {y_col}")
+                adata_obj.obs[x_col] = points[:, 0]
+                adata_obj.obs[y_col] = points[:, 1]
+            else:
+                print(f"📝 Columns not found or not specified. Updating adata.obsm['{sp_key}']")
+                adata_obj.obsm[sp_key] = points
 
-    if os.path.exists(h5ad_path):
-        adata = sc.read_h5ad(h5ad_path)
-        # debug_step_visualization(adata, im2_bgr_orig, "0_Raw_Source", output_dir, x_obs_col, y_obs_col,rotate=180.0,radius=3)
-        pts = get_coords(adata)
-        if (abs(rotate) > 1e-12) or (abs(scale - 1.0) > 1e-12):
-            print(f"🔄 Applying manual pre-transform: rotate={rotate}°, scale={scale}")
-            h, w = im2_bgr_orig.shape[:2]
-            pts = apply_manual_transform(pts, rotate, scale,origin=origin)
-            # 更新临时坐标回 adata 供可视化
-            adata.obs[x_obs_col] = pts[:, 0]
-            adata.obs[y_obs_col] = pts[:, 1]
+        if os.path.exists(h5ad_path):
+            adata = sc.read_h5ad(h5ad_path)
             
-            # === [调试点 1]：手动变换后 vs 原始 Source Image ===
-            # 💡 注意：如果你在这里旋转了点，但没有旋转 im2_bgr_orig，这里一定会对不上！
-            # debug_step_visualization(adata, im2_bgr_orig, "1_After_Manual", output_dir, x_obs_col, y_obs_col,rotate=0.0,radius=3)
-        
-        # Scaling
-        scale_x, scale_y = W / orig_W2, H / orig_H2
-        pts[:, 0] *= scale_x
-        pts[:, 1] *= scale_y
-
-        adata.obs[x_obs_col] = pts[:, 0]
-        adata.obs[y_obs_col] = pts[:, 1]
-        # === [调试点 2]：缩放后 vs RoMa 的中间图 (im2_resized) ===
-        # debug_step_visualization(adata, im2_resized, "2_RoMa_Resolution", output_dir, x_obs_col, y_obs_col,rotate=0.0,radius=2)
-        
-        # Transform
-        if method.lower() == 'bspline':
-            pts_t = np.array([tx_csv.TransformPoint((float(p[0]), float(p[1]))) for p in pts])
-        elif method.lower() == 'affine+bspline':
-            pts_aff = cv2.transform(pts.reshape(-1, 1, 2), M).reshape(-1, 2)
-            pts_t = np.array([tx_csv.TransformPoint((float(p[0]), float(p[1]))) for p in pts_aff])
-        elif method.lower() == 'homography':
-            pts_t = cv2.perspectiveTransform(pts.reshape(-1, 1, 2), M).reshape(-1, 2)
-        else:
-            pts_t = cv2.transform(pts.reshape(-1, 1, 2), M).reshape(-1, 2)
-        
-        adata.obs[x_obs_col] = pts_t[:, 0]
-        adata.obs[y_obs_col] = pts_t[:, 1]
-        # === [调试点 3]：对齐变换后 vs 目标图 (im1_resized) ===
-        # 💡 此时点应该已经映射到了 Target 图的 1152 空间
-        # debug_step_visualization(adata, warped_small, "3_After_Alignment", output_dir, x_obs_col, y_obs_col,rotate=0.0,radius=2)
+            # 获取初始坐标
+            pts = get_coords(adata)
             
-        # Rescale back
-        scale_x_back, scale_y_back = orig_W / W, orig_H / H
-        pts_transformed_orig = pts_t.copy()
-        pts_transformed_orig[:, 0] *= scale_x_back
-        pts_transformed_orig[:, 1] *= scale_y_back
-        
-        # Update Data
-        adata.obsm[spatial_key] = pts_transformed_orig
-        if x_obs_col: adata.obs[x_obs_col] = pts_transformed_orig[:, 0]
-        if y_obs_col: adata.obs[y_obs_col] = pts_transformed_orig[:, 1]
-        # === [调试点 4]：最终结果 vs 原始 Target Image ===
-        # debug_step_visualization(adata, warped_im2_orig, "4_Final_Result", output_dir, x_obs_col, y_obs_col,rotate=0.0,radius=2)
-        
-        # === [Sanitize] Clean _index issues ===
-        def sanitize_dataframe(df, name="df"):
-            if '_index' in df.columns:
-                print(f"⚠️ Removing '_index' column from {name}...")
-                df.drop(columns=['_index'], inplace=True)
-            if df.index.name == '_index':
-                print(f"⚠️ Renaming index from '_index' to None in {name}...")
-                df.index.name = None
+            # --- Pre-transform (Rotate/Scale) ---
+            if (abs(rotate) > 1e-12) or (abs(scale - 1.0) > 1e-12):
+                print(f"🔄 Applying manual pre-transform: rotate={rotate}°, scale={scale}")
+                pts = apply_manual_transform(pts, rotate, scale, origin=origin)
+                # 更新中间结果
+                update_coords_in_adata(adata, pts, x_obs_col, y_obs_col, spatial_key)
 
-        sanitize_dataframe(adata.obs, "adata.obs")
-        sanitize_dataframe(adata.var, "adata.var")
+            # --- Scaling to Registration Resolution ---
+            scale_x, scale_y = W / orig_W2, H / orig_H2
+            pts[:, 0] *= scale_x
+            pts[:, 1] *= scale_y
+            
+            # 更新中间结果
+            update_coords_in_adata(adata, pts, x_obs_col, y_obs_col, spatial_key)
+            
+            # --- Transform (Registration) ---
+            if method.lower() == 'bspline':
+                pts_t = np.array([tx_csv.TransformPoint((float(p[0]), float(p[1]))) for p in pts])
+            elif method.lower() == 'affine+bspline':
+                pts_aff = cv2.transform(pts.reshape(-1, 1, 2), M).reshape(-1, 2)
+                pts_t = np.array([tx_csv.TransformPoint((float(p[0]), float(p[1]))) for p in pts_aff])
+            elif method.lower() == 'homography':
+                pts_t = cv2.perspectiveTransform(pts.reshape(-1, 1, 2), M).reshape(-1, 2)
+            else:
+                pts_t = cv2.transform(pts.reshape(-1, 1, 2), M).reshape(-1, 2)
+            
+            # 更新中间结果
+            update_coords_in_adata(adata, pts_t, x_obs_col, y_obs_col, spatial_key)
+                
+            # --- Rescale back to Original Resolution ---
+            scale_x_back, scale_y_back = orig_W / W, orig_H / H
+            pts_transformed_orig = pts_t.copy()
+            pts_transformed_orig[:, 0] *= scale_x_back
+            pts_transformed_orig[:, 1] *= scale_y_back
+            
+            # --- Final Update Data (最终保存) ---
+            # 这里会执行你在问题中要求的判断逻辑
+            update_coords_in_adata(adata, pts_transformed_orig, x_obs_col, y_obs_col, spatial_key)
+            
+            # === [Sanitize] Clean _index issues ===
+            def sanitize_dataframe(df, name="df"):
+                if '_index' in df.columns:
+                    print(f"⚠️ Removing '_index' column from {name}...")
+                    df.drop(columns=['_index'], inplace=True)
+                if df.index.name == '_index':
+                    print(f"⚠️ Renaming index from '_index' to None in {name}...")
+                    df.index.name = None
 
-        if adata.raw is not None:
+            sanitize_dataframe(adata.obs, "adata.obs")
+            sanitize_dataframe(adata.var, "adata.var")
+
+            if adata.raw is not None:
+                try:
+                    raw_adata = adata.raw.to_adata()
+                    if '_index' in raw_adata.var.columns or raw_adata.var.index.name == '_index':
+                        # print("⚠️ Found '_index' issue in adata.raw! Re-generating raw...")
+                        sanitize_dataframe(raw_adata.var, "adata.raw.var")
+                        adata.raw = raw_adata
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not sanitize adata.raw: {e}")
+
+            # Save
             try:
-                raw_adata = adata.raw.to_adata()
-                if '_index' in raw_adata.var.columns or raw_adata.var.index.name == '_index':
-                    print("⚠️ Found '_index' issue in adata.raw! Re-generating raw...")
-                    sanitize_dataframe(raw_adata.var, "adata.raw.var")
-                    adata.raw = raw_adata
+                adata.write(h5ad_save_path)
+                print(f"✅ Saved transformed H5AD to {h5ad_save_path}")
             except Exception as e:
-                print(f"⚠️ Warning: Could not sanitize adata.raw: {e}")
-
-        # Save
-        try:
-            adata.write(h5ad_save_path)
-            print(f"✅ Saved transformed H5AD to {h5ad_save_path}")
-        except Exception as e:
-            print(f"❌ Failed to save H5AD: {e}")
+                print(f"❌ Failed to save H5AD: {e}")
+                h5ad_save_path = None
+        else:
             h5ad_save_path = None
-    else:
-        h5ad_save_path = None
 
     # 6. Basic Visualization (Save to disk only)
     kpts1_orig = kpts1.copy()
@@ -504,9 +530,9 @@ def align_and_process_images(
     vis_img_overlay = cv2.addWeighted(im1_bgr_orig, 0.4, warped_im2_orig, 0.6, 0)
     cv2.imwrite(os.path.join(output_dir, "3_alignment_overlay.jpg"), vis_img_overlay)
 
-    # show_image_in_jupyter(vis_matches,"RoMa Keypoint Matches")
-    # show_image_in_jupyter(vis_compare,"Target vs. Aligned Source")
-    # show_image_in_jupyter(vis_img_overlay,"Overlay")
+    show_image_in_jupyter(vis_matches,"RoMa Keypoint Matches")
+    show_image_in_jupyter(vis_compare,"Target vs. Aligned Source")
+    show_image_in_jupyter(vis_img_overlay,"Overlay")
 
     end_time = time.time()
     print(f"Alignment runtime: {end_time - start_time:.4f} seconds")
