@@ -69,6 +69,6 @@ Tutorial files are organized by application scenario. Each case keeps its notebo
 
 ## Data
 
-The prepared tutorial data are available from Google Drive. Download the archive from the link below and use it as the input data for the notebooks in `Tutorial/`.
+The prepared tutorial data are available from Google Drive. Download the archive from the link below and use it as the input data in `Data/`. Users can put your data in `Data/` when using SPOmiAlign for your task.
 
 [https://drive.google.com/file/d/17j39rTAISwuH-kL3H0hnvzTG15Zo_xSK/view?usp=sharing](https://drive.google.com/file/d/1Yd4iRdPewefABQdpaVC10noy0DNl3T_r/view?usp=sharing)
