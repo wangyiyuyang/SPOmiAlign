@@ -9,6 +9,7 @@
 
 from pathlib import Path
 import sys
+import importlib
 import matplotlib.pyplot as plt
 import cv2
 try:
@@ -23,6 +24,9 @@ PROJECT_ROOT = next(
 spomialign_path = PROJECT_ROOT / "SPOmiAlign"
 if str(spomialign_path) not in sys.path:
     sys.path.insert(0, str(spomialign_path))
+
+import tutorial_utils as tutorial_utils_module
+importlib.reload(tutorial_utils_module)
 
 from tutorial_utils import (
     generate_ssi_visualization,
@@ -64,14 +68,14 @@ ALIGNMENT_PARAMS = {
 }
 DATA_PARAMS, SSI_PARAMS, ALIGNMENT_PARAMS
 
-# ## 3. Generate SSI images
+# ## 3. Generate h5ad render images
 #
-# The target and source h5ad files are rendered as SSI images before matching. Coordinates are read from `obsm['spatial']`, and spot intensity is computed from expression counts in `X` by default.
+# The target and source h5ad files are rendered for visual inspection. The alignment step builds SSI maps from these renderings and uses the SSI maps for matching.
 
 target_h5ad = DATA_DIR / DATA_PARAMS["target_section_path"]
 source_h5ad = DATA_DIR / DATA_PARAMS["source_section_path"]
 
-target_ssi = generate_ssi_visualization(
+target_render = generate_ssi_visualization(
     output_root=OUTPUT_ROOT,
     sample_id=ALIGNMENT_PARAMS["sample_id"],
     h5ad_path=target_h5ad,
@@ -80,7 +84,7 @@ target_ssi = generate_ssi_visualization(
     rotate=SSI_PARAMS["target_rotate"],
     SPOT={"shape": SSI_PARAMS["SPOT"]["shape"], "radius": SSI_PARAMS["SPOT"]["target_radius"]},
 )
-source_ssi = generate_ssi_visualization(
+source_render = generate_ssi_visualization(
     output_root=OUTPUT_ROOT,
     sample_id=ALIGNMENT_PARAMS["sample_id"],
     h5ad_path=source_h5ad,
@@ -90,8 +94,8 @@ source_ssi = generate_ssi_visualization(
     SPOT={"shape": SSI_PARAMS["SPOT"]["shape"], "radius": SSI_PARAMS["SPOT"]["source_radius"]},
 )
 
-images = [target_ssi["section_visualization"], source_ssi["section_visualization"]]
-titles = ["Target SSI", "Source SSI"]
+images = [target_render["section_visualization"], source_render["section_visualization"]]
+titles = ["Target h5ad render", "Source h5ad render"]
 
 # Handle stale notebook state where images/titles were accidentally wrapped by a trailing comma.
 if len(images) == 1 and isinstance(images[0], (list, tuple)):
@@ -121,6 +125,8 @@ result = run_omic_to_omic_alignment(
     output_root=OUTPUT_ROOT,
     target_h5ad=target_h5ad,
     source_h5ad=source_h5ad,
+    target_alignment_image=target_render["section_visualization"],
+    source_alignment_image=source_render["section_visualization"],
     run_reassignment=False,
     **SSI_PARAMS,
     **ALIGNMENT_PARAMS,
@@ -156,8 +162,8 @@ result["high_to_low"], result["low_to_high"]
 
 # ## 6. Outputs
 
-images=[result["target_section_visualization"], result["source_section_visualization"], result["before_overlay"], result["after_overlay"]]
-titles=["Reference ST SSI", "Source SM SSI", "overlay before alignment", "overlay after alignment"]
+images=[result["target_alignment_image"], result["source_alignment_image"], result["before_overlay"], result["after_overlay"]]
+titles=["Reference ST alignment image", "Source SM alignment image", "overlay before alignment", "overlay after alignment"]
 figsize=(22, 5)
 titles = titles or ["" for _ in images]
 if figsize is None:

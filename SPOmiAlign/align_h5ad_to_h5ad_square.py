@@ -468,6 +468,7 @@ def render_style_from_args(args: argparse.Namespace, prefix: str) -> dict:
         "marker_alpha": float(getattr(args, f"{prefix}_marker_alpha")),
         "gray_min": float(getattr(args, f"{prefix}_gray_min")),
         "gray_max": float(getattr(args, f"{prefix}_gray_max")),
+        "dpi": 100,
     }
     if style["intensity_mode"] == "obs_col" and not style["intensity_obs_col"]:
         raise ValueError(f"{prefix}: --{prefix}-intensity-obs-col is required when intensity mode is obs_col.")
@@ -533,7 +534,7 @@ def render_transformed_source_in_target_render_space(
             intensity_log_transform=bool(source_render_style["intensity_log_transform"]),
             rotate=0.0,
             scale=1.0,
-            dpi=100,
+            dpi=int(source_render_style.get("dpi", 100)),
             marker_alpha=float(source_render_style["marker_alpha"]),
             gray_min=float(source_render_style["gray_min"]),
             gray_max=float(source_render_style["gray_max"]),
@@ -606,7 +607,7 @@ def render_h5ad(
             intensity_log_transform=bool(render_style["intensity_log_transform"]),
             rotate=0.0,
             scale=1.0,
-            dpi=100,
+            dpi=int(render_style.get("dpi", 100)),
             marker_alpha=float(render_style["marker_alpha"]),
             gray_min=float(render_style["gray_min"]),
             gray_max=float(render_style["gray_max"]),

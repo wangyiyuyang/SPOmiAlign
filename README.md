@@ -36,7 +36,7 @@ conda env create -f env/SPOmiAlign.yml
 conda activate SPOmiAlign
 ```
 
-We run SPOmiAlign with A100 and torch2.6.0+cu124. If using GPU acceleration, install the PyTorch build that matches your GPU driver and CUDA version. 
+We run SPOmiAlign with A100 and torch2.6.0+cu124. If using GPU acceleration, install the PyTorch build that matches your GPU driver and CUDA version.
 
 2. Install the bundled local dependencies:
 
@@ -71,4 +71,4 @@ Tutorial files are organized by application scenario. Each case keeps its notebo
 
 The prepared tutorial data are available from Google Drive. Download the archive from the link below and use it as the input data for the notebooks in `Tutorial/`.
 
-[https://drive.google.com/file/d/17j39rTAISwuH-kL3H0hnvzTG15Zo_xSK/view?usp=sharing](https://drive.google.com/file/d/17j39rTAISwuH-kL3H0hnvzTG15Zo_xSK/view?usp=sharing)
+[https://drive.google.com/file/d/17j39rTAISwuH-kL3H0hnvzTG15Zo_xSK/view?usp=sharing](https://drive.google.com/file/d/1Yd4iRdPewefABQdpaVC10noy0DNl3T_r/view?usp=sharing)

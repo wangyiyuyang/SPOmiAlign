@@ -42,6 +42,7 @@ DATA_DIR, OUTPUT_ROOT = get_tutorial_paths(PROJECT_ROOT)
 # | `target_section_path` | reference ST h5ad path in `Data/`. |
 # | `source_section_path` | source SM h5ad path relative to `Data/`. |
 # | `target_rotate` / `source_rotate` | Clockwise manual rotation applied when rendering the target/source h5ad into SSI. |
+# | `source_scale` | Manual scale applied to the source h5ad during SSI rendering. |
 # | `SPOT` | Spot shape (`square` / `circle`) and visualization radius. |
 # | `Alignment_mode` | SPOmiAlign supports three alignment modes: Rigid (`Rigid`), Affine (`Affine`, `Homography`), and Non-Rigid (`bspline`, `affine+bspline`). |
 # | `device` | Torch device used by alignment, for example `cuda:0`, `cuda:1`, or `cpu`; `None` keeps automatic selection. |
@@ -54,6 +55,8 @@ DATA_PARAMS = {
 SSI_PARAMS = {
     "target_rotate": 0.0,
     "source_rotate": 60.0,
+    "source_scale": 0.6,
+    "SSI_dpi": 200,
     "SPOT": {"shape": "square", "target_radius": 15, "source_radius": 12},
 }
 
@@ -64,37 +67,42 @@ ALIGNMENT_PARAMS = {
 }
 DATA_PARAMS, SSI_PARAMS, ALIGNMENT_PARAMS
 
-# ## 3. Generate SSI images
+# ## 3. Generate h5ad render images
 #
-# The target and source h5ad files are rendered as SSI images before matching. Coordinates are read from `obsm['spatial']`, and spot intensity is computed from expression counts in `X` by default.
+# The target and source h5ad files are rendered for visual inspection. The alignment step builds SSI maps from these renderings and uses the SSI maps for matching.
 
 target_h5ad = DATA_DIR / DATA_PARAMS["target_section_path"]
 source_h5ad = DATA_DIR / DATA_PARAMS["source_section_path"]
 
-target_ssi = generate_ssi_visualization(
+target_render = generate_ssi_visualization(
     output_root=OUTPUT_ROOT,
     sample_id=ALIGNMENT_PARAMS["sample_id"],
     h5ad_path=target_h5ad,
     label="target/ST",
     output_name="st_section_visualization.png",
     rotate=SSI_PARAMS["target_rotate"],
+    SSI_dpi=SSI_PARAMS["SSI_dpi"],
+    marker_size=float((2 * SSI_PARAMS["SPOT"]["target_radius"] + 1) ** 2),
     SPOT={"shape": SSI_PARAMS["SPOT"]["shape"], "radius": SSI_PARAMS["SPOT"]["target_radius"]},
 )
-source_ssi = generate_ssi_visualization(
+source_render = generate_ssi_visualization(
     output_root=OUTPUT_ROOT,
     sample_id=ALIGNMENT_PARAMS["sample_id"],
     h5ad_path=source_h5ad,
     label="source/SM",
     output_name="sm_section_visualization.png",
     rotate=SSI_PARAMS["source_rotate"],
+    scale=SSI_PARAMS["source_scale"],
+    SSI_dpi=SSI_PARAMS["SSI_dpi"],
+    marker_size=float((2 * SSI_PARAMS["SPOT"]["source_radius"] + 1) ** 2),
     SPOT={"shape": SSI_PARAMS["SPOT"]["shape"], "radius": SSI_PARAMS["SPOT"]["source_radius"]},
 )
 
 
 
 
-images=[target_ssi["section_visualization"], source_ssi["section_visualization"]]
-titles=["Target SSI", "Source SSI"]
+images=[target_render["section_visualization"], source_render["section_visualization"]]
+titles=["Target h5ad render", "Source h5ad render"]
 figsize=(12, 6)
 titles = titles or ["" for _ in images]
 if figsize is None:
@@ -116,6 +124,8 @@ result = run_omic_to_omic_alignment(
     output_root=OUTPUT_ROOT,
     target_h5ad=target_h5ad,
     source_h5ad=source_h5ad,
+    target_alignment_image=target_render["section_visualization"],
+    source_alignment_image=source_render["section_visualization"],
     run_reassignment=False,
     **SSI_PARAMS,
     **ALIGNMENT_PARAMS,
@@ -149,8 +159,8 @@ result["high_to_low"], result["low_to_high"]
 
 # ## 6. Outputs
 
-images=[result["target_section_visualization"], result["source_section_visualization"], result["before_overlay"], result["after_overlay"]]
-titles=["Reference ST SSI", "Source SM SSI", "Overlay before alignment", "Overlay after alignment"]
+images=[result["target_alignment_image"], result["source_alignment_image"], result["before_overlay"], result["after_overlay"]]
+titles=["Reference ST alignment image", "Source SM alignment image", "Overlay before alignment", "Overlay after alignment"]
 figsize=(22, 5)
 titles = titles or ["" for _ in images]
 if figsize is None:

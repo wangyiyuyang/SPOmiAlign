@@ -27,8 +27,9 @@ from align_h5ad_to_h5ad_square import (  # noqa: E402
     render_h5ad,
     render_transformed_source_in_target_render_space,
     resolve_coordinate_config,
+    write_ssi_outputs,
 )
-from data_preprocessing import scatter_h5ad_to_image  # noqa: E402
+from data_preprocessing import _apply_rotate_scale_clockwise, scatter_h5ad_to_image  # noqa: E402
 from reassignment import (  # noqa: E402
     build_reassigned_h5ad_from_mapping,
     cmap_blue,
@@ -298,6 +299,13 @@ def run_image_to_image_alignment(
     sample_id: str,
     target_image_path: str,
     source_image_path: str,
+    target_h5ad_path: str | None = None,
+    source_h5ad_path: str | None = None,
+    target_h5ad_spatial_key: str = "spatial",
+    source_h5ad_spatial_key: str = "spatial",
+    h5ad_point_shape: str = "square",
+    h5ad_point_radius: int = 6,
+    h5ad_dpi: int = 150,
     method: str | None = None,
     Alignment_mode: str | None = None,
     device: str | None = None,
@@ -305,17 +313,25 @@ def run_image_to_image_alignment(
     alignment_method = _resolve_alignment_mode(method, Alignment_mode)
     target_image = require_path(data_root / target_image_path, "Target image")
     source_image = require_path(data_root / source_image_path, "Source image")
+    target_h5ad = require_path(data_root / target_h5ad_path, "Target h5ad") if target_h5ad_path is not None else None
+    source_h5ad = require_path(data_root / source_h5ad_path, "Source h5ad") if source_h5ad_path is not None else None
     sample_dir = Path(output_root) / "img_2_img" / sample_id
     alignment_dir = sample_dir / "alignment"
     alignment_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Target image: {target_image}")
     print(f"Source image: {source_image}")
+    if target_h5ad is not None:
+        print(f"Target h5ad: {target_h5ad}")
+    if source_h5ad is not None:
+        print(f"Source h5ad: {source_h5ad}")
     align_and_process_images(
         img1_path=str(target_image),
         img2_path=str(source_image),
+        h5ad_path=str(source_h5ad) if source_h5ad is not None else None,
         method=alignment_method,
         output_dir=str(alignment_dir),
+        spatial_key=str(source_h5ad_spatial_key),
         rotate=0.0,
         scale=1.0,
         auto_upscale_reference=False,
@@ -328,7 +344,7 @@ def run_image_to_image_alignment(
     make_blend_overlay(target_image, source_image, before_overlay)
     make_blend_overlay(target_image, aligned_source, after_overlay)
 
-    return {
+    result = {
         "target_section_visualization": target_image,
         "source_section_visualization": source_image,
         "aligned_source": aligned_source,
@@ -336,6 +352,78 @@ def run_image_to_image_alignment(
         "after_overlay": after_overlay.resolve(),
         "alignment_dir": alignment_dir.resolve(),
     }
+    if target_h5ad is not None:
+        target_h5ad_png = alignment_dir / "target_h5ad_scatter.png"
+        render_h5ad_on_image_canvas(
+            h5ad_path=target_h5ad,
+            output_png=target_h5ad_png,
+            canvas_image_path=target_image,
+            spatial_key=target_h5ad_spatial_key,
+            point_shape=h5ad_point_shape,
+            point_radius=h5ad_point_radius,
+            dpi=h5ad_dpi,
+        )
+        result["target_h5ad"] = target_h5ad.resolve()
+        result["target_h5ad_visualization"] = target_h5ad_png.resolve()
+    if source_h5ad is not None:
+        transformed_h5ad = require_path(alignment_dir / "transformed.h5ad", "Transformed h5ad")
+        transformed_h5ad_png = alignment_dir / "transformed_h5ad_scatter.png"
+        render_h5ad_on_image_canvas(
+            h5ad_path=transformed_h5ad,
+            output_png=transformed_h5ad_png,
+            canvas_image_path=target_image,
+            spatial_key=source_h5ad_spatial_key,
+            point_shape=h5ad_point_shape,
+            point_radius=h5ad_point_radius,
+            dpi=h5ad_dpi,
+        )
+        h5ad_overlay = make_h5ad_overlay(
+            target_image,
+            transformed_h5ad_png,
+            alignment_dir / "color_alignment_overlay.png",
+        )
+        result["source_h5ad"] = source_h5ad.resolve()
+        result["transformed_h5ad"] = transformed_h5ad.resolve()
+        result["transformed_h5ad_visualization"] = transformed_h5ad_png.resolve()
+        result["h5ad_overlay"] = h5ad_overlay
+    return result
+
+
+def render_h5ad_on_image_canvas(
+    *,
+    h5ad_path: Path,
+    output_png: Path,
+    canvas_image_path: Path | str,
+    spatial_key: str = "spatial",
+    point_shape: str = "square",
+    point_radius: int = 6,
+    dpi: int = 150,
+    gray_min: float = 0.55,
+    gray_max: float = 0.9,
+) -> Path:
+    scatter_h5ad_to_image(
+        input_h5ad=str(h5ad_path),
+        output_png=str(output_png),
+        spatial_key=str(spatial_key),
+        intensity_mode="X_sum",
+        intensity_log_transform=True,
+        threshold_percentile=None,
+        background="black",
+        point_shape=str(point_shape),
+        radius=int(point_radius),
+        rotate=0.0,
+        scale=1.0,
+        display_long_side=0,
+        padding=0,
+        canvas_size=image_size_xy(canvas_image_path),
+        dpi=int(dpi),
+        marker_alpha=1.0,
+        gray_min=float(gray_min),
+        gray_max=float(gray_max),
+        invert_intensity=False,
+        enhance=True,
+    )
+    return Path(output_png).resolve()
 
 
 def render_spatial_h5ad(
@@ -593,6 +681,7 @@ def default_h5ad_render_style(
     display_long_side: int,
     padding: int,
     point_radius: int,
+    dpi: int = 100,
     point_shape: str = "square",
     background: str = "white",
 ) -> dict:
@@ -611,7 +700,75 @@ def default_h5ad_render_style(
         "marker_alpha": 0.95,
         "gray_min": 0.35,
         "gray_max": 0.88,
+        "dpi": int(dpi),
     }
+
+
+def _scale_render_meta_for_dpi(render_meta: dict, dpi: int, base_dpi: int = 100) -> dict:
+    factor = float(dpi) / float(base_dpi)
+    scaled = dict(render_meta)
+    if abs(factor - 1.0) <= 1e-12:
+        return scaled
+    scaled["fit_scale"] = float(render_meta["fit_scale"]) * factor
+    scaled["padding"] = int(round(float(render_meta["padding"]) * factor))
+    scaled["render_width"] = max(1, int(round(float(render_meta["render_width"]) * factor)))
+    scaled["render_height"] = max(1, int(round(float(render_meta["render_height"]) * factor)))
+    if int(render_meta.get("display_long_side", 0)) > 0:
+        scaled["display_long_side"] = max(1, int(round(float(render_meta["display_long_side"]) * factor)))
+    return scaled
+
+
+def _scale_render_style_for_dpi(render_style: dict, dpi: int, base_dpi: int = 100) -> dict:
+    factor = float(dpi) / float(base_dpi)
+    scaled = dict(render_style)
+    scaled["dpi"] = int(dpi)
+    if abs(factor - 1.0) <= 1e-12:
+        return scaled
+    scaled["point_radius"] = max(1, int(round(float(render_style["point_radius"]) * factor)))
+    if int(render_style.get("display_long_side", 0)) > 0:
+        scaled["display_long_side"] = max(1, int(round(float(render_style["display_long_side"]) * factor)))
+    scaled["padding"] = int(round(float(render_style.get("padding", 0)) * factor))
+    return scaled
+
+
+def _render_demo_style_h5ad(
+    *,
+    h5ad_path: Path,
+    output_png: Path,
+    coord_config: dict,
+    rotate: float,
+    scale: float,
+    point_shape: str,
+    point_radius: int,
+    dpi: int,
+    display_long_side: int = 2200,
+    padding: int = 32,
+    gray_min: float = 0.35,
+    gray_max: float = 0.88,
+    marker_size: float | None = None,
+) -> np.ndarray | None:
+    _, origin = scatter_h5ad_to_image(
+        input_h5ad=str(h5ad_path),
+        output_png=str(output_png),
+        spatial_key=str(coord_config["spatial_key"] or "spatial"),
+        x_obs_col=coord_config["x_obs_col"],
+        y_obs_col=coord_config["y_obs_col"],
+        background="white",
+        point_shape=str(point_shape),
+        radius=int(point_radius),
+        threshold_percentile=None,
+        intensity_log_transform=False,
+        rotate=float(rotate),
+        scale=float(scale),
+        marker_size=marker_size,
+        display_long_side=int(display_long_side),
+        padding=int(padding),
+        dpi=int(dpi),
+        marker_alpha=0.9,
+        gray_min=float(gray_min),
+        gray_max=float(gray_max),
+    )
+    return origin
 
 
 def prepare_directional_inputs(
@@ -644,6 +801,28 @@ def prepare_directional_inputs(
     return st_with_keys_path.resolve(), sm_with_keys_path.resolve()
 
 
+def _rotate_spatial_for_plot(
+    adata: sc.AnnData,
+    *,
+    spatial_key: str,
+    rotate_deg: float = 0.0,
+    scale: float = 1.0,
+) -> sc.AnnData:
+    if abs(float(rotate_deg)) <= 1e-12 and abs(float(scale) - 1.0) <= 1e-12:
+        return adata
+    adata_plot = adata.copy()
+    xy = np.asarray(adata_plot.obsm[spatial_key]).copy()
+    x_rot, y_rot, _ = _apply_rotate_scale_clockwise(
+        xy[:, 0],
+        xy[:, 1],
+        rotate_deg=float(rotate_deg),
+        scale=float(scale),
+        origin_mode="data",
+    )
+    adata_plot.obsm[spatial_key] = np.column_stack([x_rot, y_rot])
+    return adata_plot
+
+
 def run_directional_reassignment_fixed_roles(
     *,
     s1_h5ad: Path,
@@ -656,6 +835,10 @@ def run_directional_reassignment_fixed_roles(
     d_ref_max: float | None = None,
     distance_multiplier: float = 2.0,
     scale_by_mapping_factor: bool = True,
+    plot_s1_rotate: float = 0.0,
+    plot_s1_scale: float = 1.0,
+    plot_s2_rotate: float = 0.0,
+    plot_s2_scale: float = 1.0,
 ) -> dict[str, Path | dict]:
     out_dir.mkdir(parents=True, exist_ok=True)
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -734,15 +917,28 @@ def run_directional_reassignment_fixed_roles(
     map_csv = out_dir / f"{direction}_mapping.csv"
     mapping.to_csv(map_csv, index=False)
 
-    plot_h5ad_umi_squares(
+    adata_s1_plot = _rotate_spatial_for_plot(
         adata_s1,
+        spatial_key=s1_spatial_key,
+        rotate_deg=float(plot_s1_rotate),
+        scale=float(plot_s1_scale),
+    )
+    adata_s2_plot = _rotate_spatial_for_plot(
+        adata_s2,
+        spatial_key=s2_spatial_key,
+        rotate_deg=float(plot_s2_rotate),
+        scale=float(plot_s2_scale),
+    )
+
+    plot_h5ad_umi_squares(
+        adata_s1_plot,
         out_png=str(plot_dir / "S1_umi.png"),
         title=f"S1 UMI ({s1_spatial_key})",
         spatial_key=s1_spatial_key,
         cmap=cmap_orange,
     )
     plot_h5ad_umi_squares(
-        adata_s2,
+        adata_s2_plot,
         out_png=str(plot_dir / "S2_umi.png"),
         title=f"S2 UMI ({s2_spatial_key})",
         spatial_key=s2_spatial_key,
@@ -783,6 +979,10 @@ def run_reassignment(
     s1_spatial_key: str = "spatial_spomialign",
     s2_spatial_key: str = "spatial_raw",
     direction: str | tuple[str, ...] | list[str] | None = None,
+    plot_s1_rotate: float = 0.0,
+    plot_s1_scale: float = 1.0,
+    plot_s2_rotate: float = 0.0,
+    plot_s2_scale: float = 1.0,
 ) -> dict[str, dict]:
     directions = (
         ("high_to_low", "low_to_high")
@@ -811,6 +1011,10 @@ def run_reassignment(
             d_ref_max=None,
             distance_multiplier=2.0,
             scale_by_mapping_factor=True,
+            plot_s1_rotate=float(plot_s1_rotate),
+            plot_s1_scale=float(plot_s1_scale),
+            plot_s2_rotate=float(plot_s2_rotate),
+            plot_s2_scale=float(plot_s2_scale),
         )
     return outputs
 
@@ -825,7 +1029,8 @@ def generate_h5ad_pair_ssi(
     source_rotate: float = -90.0,
     source_scale: float = 1.0,
     display_long_side: int = 2200,
-    padding: int = 0,
+    padding: int = 32,
+    SSI_dpi: int = 200,
     SPOT: dict | str | None = None,
     point_shape: str = "square",
     target_radius: int = 5,
@@ -877,30 +1082,41 @@ def generate_h5ad_pair_ssi(
         display_long_side=display_long_side,
         padding=padding,
         point_radius=target_radius,
+        dpi=SSI_dpi,
         point_shape=point_shape,
     )
     source_style = default_h5ad_render_style(
         display_long_side=display_long_side,
         padding=padding,
         point_radius=source_radius,
+        dpi=SSI_dpi,
         point_shape=point_shape,
     )
-
     target_png = render_dir / "st_section_visualization.png"
     source_png = render_dir / "sm_section_visualization.png"
-    source_origin = render_h5ad(
-        input_h5ad=source_h5ad,
-        output_png=source_png,
-        coord_config=source_coord_config,
-        render_meta=source_meta,
-        render_style=source_style,
-    )
-    render_h5ad(
-        input_h5ad=target_h5ad,
+    _render_demo_style_h5ad(
+        h5ad_path=target_h5ad,
         output_png=target_png,
         coord_config=target_coord_config,
-        render_meta=target_meta,
-        render_style=target_style,
+        rotate=float(target_rotate),
+        scale=1.0,
+        point_shape=point_shape,
+        point_radius=target_radius,
+        dpi=int(SSI_dpi),
+        display_long_side=int(display_long_side),
+        padding=int(padding),
+    )
+    source_origin = _render_demo_style_h5ad(
+        h5ad_path=source_h5ad,
+        output_png=source_png,
+        coord_config=source_coord_config,
+        rotate=float(source_rotate),
+        scale=float(source_scale),
+        point_shape=point_shape,
+        point_radius=source_radius,
+        dpi=int(SSI_dpi),
+        display_long_side=int(display_long_side),
+        padding=int(padding),
     )
 
     return {
@@ -926,10 +1142,12 @@ def generate_h5ad_ssi(
     rotate: float = 0.0,
     scale: float = 1.0,
     display_long_side: int = 2200,
-    padding: int = 0,
+    padding: int = 32,
+    SSI_dpi: int = 200,
     SPOT: dict | str | None = None,
     point_shape: str = "square",
     point_radius: int = 5,
+    marker_size: float | None = None,
 ) -> dict:
     h5ad_path = require_path(h5ad_path, f"{label} h5ad")
     point_shape, point_radius = _resolve_spot_style(
@@ -961,16 +1179,23 @@ def generate_h5ad_ssi(
         display_long_side=display_long_side,
         padding=padding,
         point_radius=point_radius,
+        dpi=SSI_dpi,
         point_shape=point_shape,
     )
 
     render_png = render_dir / output_name
-    origin = render_h5ad(
-        input_h5ad=h5ad_path,
+    origin = _render_demo_style_h5ad(
+        h5ad_path=h5ad_path,
         output_png=render_png,
         coord_config=coord_config,
-        render_meta=render_meta,
-        render_style=render_style,
+        rotate=float(rotate),
+        scale=float(scale),
+        point_shape=point_shape,
+        point_radius=point_radius,
+        dpi=int(SSI_dpi),
+        display_long_side=int(display_long_side),
+        padding=int(padding),
+        marker_size=marker_size,
     )
     return {
         "input_h5ad": h5ad_path,
@@ -1038,7 +1263,8 @@ def run_omic_to_omic_alignment(
     source_rotate: float = -90.0,
     source_scale: float = 1.0,
     display_long_side: int = 2200,
-    padding: int = 0,
+    padding: int = 32,
+    SSI_dpi: int = 200,
     SPOT: dict | str | None = None,
     point_shape: str = "square",
     target_radius: int = 5,
@@ -1047,6 +1273,8 @@ def run_omic_to_omic_alignment(
     Alignment_mode: str | None = None,
     device: str | None = None,
     run_reassignment: bool = True,
+    target_alignment_image: Path | str | None = None,
+    source_alignment_image: Path | str | None = None,
 ) -> dict:
     alignment_method = _resolve_alignment_mode(method, Alignment_mode)
     point_shape, target_radius, source_radius = _resolve_pair_spot_style(
@@ -1057,8 +1285,10 @@ def run_omic_to_omic_alignment(
     )
     sample_dir = Path(output_root) / "h5ad_2_h5ad" / sample_id
     render_dir = sample_dir / "rendering"
+    ssi_dir = sample_dir / "ssi"
     alignment_dir = sample_dir / "alignment"
     render_dir.mkdir(parents=True, exist_ok=True)
+    ssi_dir.mkdir(parents=True, exist_ok=True)
     alignment_dir.mkdir(parents=True, exist_ok=True)
 
     target_coord_config = resolve_coordinate_config(
@@ -1098,40 +1328,92 @@ def run_omic_to_omic_alignment(
         display_long_side=display_long_side,
         padding=padding,
         point_radius=target_radius,
+        dpi=SSI_dpi,
         point_shape=point_shape,
     )
     source_style = default_h5ad_render_style(
         display_long_side=display_long_side,
         padding=padding,
         point_radius=source_radius,
+        dpi=SSI_dpi,
         point_shape=point_shape,
     )
+    target_png = (
+        require_path(Path(target_alignment_image), "Target alignment image")
+        if target_alignment_image is not None
+        else render_dir / "st_section_visualization.png"
+    )
+    source_png = (
+        require_path(Path(source_alignment_image), "Source alignment image")
+        if source_alignment_image is not None
+        else render_dir / "sm_section_visualization.png"
+    )
 
-    target_png = render_dir / "st_section_visualization.png"
-    source_png = render_dir / "sm_section_visualization.png"
-    render_h5ad(
-        input_h5ad=target_h5ad,
-        output_png=target_png,
-        coord_config=target_coord_config,
-        render_meta=target_meta,
-        render_style=target_style,
-    )
-    source_origin = render_h5ad(
-        input_h5ad=source_h5ad,
-        output_png=source_png,
-        coord_config=source_coord_config,
-        render_meta=source_meta,
-        render_style=source_style,
-    )
+    if target_alignment_image is None:
+        _render_demo_style_h5ad(
+            h5ad_path=target_h5ad,
+            output_png=target_png,
+            coord_config=target_coord_config,
+            rotate=float(target_rotate),
+            scale=1.0,
+            point_shape=point_shape,
+            point_radius=target_radius,
+            dpi=int(SSI_dpi),
+            display_long_side=int(display_long_side),
+            padding=int(padding),
+        )
+        write_ssi_outputs(
+            input_h5ad=target_h5ad,
+            coord_config=target_coord_config,
+            render_png=target_png,
+            render_meta=target_meta,
+            output_dir=ssi_dir / "target",
+            label="target/ST",
+            reference_blur_sigma=6.0,
+            ssim_sigma=1.5,
+        )
+        target_alignment_png = require_path(ssi_dir / "target" / "ssi_map.png", "Target alignment image")
+    else:
+        target_alignment_png = target_png
+
+    if source_alignment_image is None:
+        source_origin = _render_demo_style_h5ad(
+            h5ad_path=source_h5ad,
+            output_png=source_png,
+            coord_config=source_coord_config,
+            rotate=float(source_rotate),
+            scale=float(source_scale),
+            point_shape=point_shape,
+            point_radius=source_radius,
+            dpi=int(SSI_dpi),
+            display_long_side=int(display_long_side),
+            padding=int(padding),
+        )
+        write_ssi_outputs(
+            input_h5ad=source_h5ad,
+            coord_config=source_coord_config,
+            render_png=source_png,
+            render_meta=source_meta,
+            output_dir=ssi_dir / "source",
+            label="source/SM",
+            reference_blur_sigma=6.0,
+            ssim_sigma=1.5,
+        )
+        source_alignment_png = require_path(ssi_dir / "source" / "ssi_map.png", "Source alignment image")
+    else:
+        source_origin = None
+        source_alignment_png = source_png
 
     before_overlay = make_blend_overlay(
-        target_png,
-        source_png,
+        target_alignment_png,
+        source_alignment_png,
         alignment_dir / "overlay_before_alignment.png",
     )
+    print(f"[OK] Alignment target image: {target_alignment_png}")
+    print(f"[OK] Alignment source image: {source_alignment_png}")
     align_and_process_images(
-        img1_path=str(target_png),
-        img2_path=str(source_png),
+        img1_path=str(target_alignment_png),
+        img2_path=str(source_alignment_png),
         h5ad_path=str(source_h5ad),
         method=alignment_method,
         output_dir=str(alignment_dir),
@@ -1167,6 +1449,10 @@ def run_omic_to_omic_alignment(
         "source_h5ad": source_h5ad,
         "target_section_visualization": target_png.resolve(),
         "source_section_visualization": source_png.resolve(),
+        "target_alignment_image": target_alignment_png.resolve(),
+        "source_alignment_image": source_alignment_png.resolve(),
+        "target_alignment_ssi": target_alignment_png.resolve(),
+        "source_alignment_ssi": source_alignment_png.resolve(),
         "transformed_h5ad": transformed_h5ad,
         "transformed_section_visualization": transformed_png.resolve(),
         "before_overlay": before_overlay,
